@@ -389,7 +389,6 @@ class DockerCommandLineJob(JobBase):
             self.add_volumes(self.generatemapper, runtime, True)
 
         runtime.append(u"--workdir=%s" % (docker_windows_path_adjust(self.builder.outdir)))
-        #runtime.append(u"--workdir=%s" % "/data")
         #runtime.append(u"--read-only=true")
 
         if kwargs.get("custom_net", None) is not None:
@@ -404,8 +403,8 @@ class DockerCommandLineJob(JobBase):
         if not onWindows():  # MS Windows does not have getuid() or geteuid() functions
             euid, egid = euid or os.geteuid(), egid or os.getgid()
 
-        #if kwargs.get("no_match_user", None) is False and (euid, egid) != (None, None):
-        #    runtime.append(u"--user=%d:%d" % (euid, egid))
+        if kwargs.get("no_match_user", None) is False and (euid, egid) != (None, None):
+            runtime.append(u"--user=%d:%d" % (euid, egid))
 
         if rm_container:
             runtime.append(u"--rm")
