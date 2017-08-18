@@ -388,8 +388,8 @@ class DockerCommandLineJob(JobBase):
         if self.generatemapper:
             self.add_volumes(self.generatemapper, runtime, True)
 
-        runtime.append(u"--workdir=%s" % (docker_windows_path_adjust(self.builder.outdir)))
-        runtime.append(u"--read-only=true")
+        #runtime.append(u"--workdir=%s" % (docker_windows_path_adjust(self.builder.outdir)))
+        #runtime.append(u"--read-only=true")
 
         if kwargs.get("custom_net", None) is not None:
             runtime.append(u"--net={0}".format(kwargs.get("custom_net")))
@@ -403,8 +403,8 @@ class DockerCommandLineJob(JobBase):
         if not onWindows():  # MS Windows does not have getuid() or geteuid() functions
             euid, egid = euid or os.geteuid(), egid or os.getgid()
 
-        if kwargs.get("no_match_user", None) is False and (euid, egid) != (None, None):
-            runtime.append(u"--user=%d:%d" % (euid, egid))
+        #if kwargs.get("no_match_user", None) is False and (euid, egid) != (None, None):
+        #    runtime.append(u"--user=%d:%d" % (euid, egid))
 
         if rm_container:
             runtime.append(u"--rm")
@@ -414,7 +414,7 @@ class DockerCommandLineJob(JobBase):
         # spec currently says "HOME must be set to the designated output
         # directory." but spec might change to designated temp directory.
         # runtime.append("--env=HOME=/tmp")
-        runtime.append(u"--env=HOME=%s" % self.builder.outdir)
+        runtime.append(u"--env=HOME=%s" % "/data")
 
         for t, v in self.environment.items():
             runtime.append(u"--env=%s=%s" % (t, v))
