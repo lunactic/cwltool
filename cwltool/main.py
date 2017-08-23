@@ -190,8 +190,10 @@ def arg_parser():  # type: () -> argparse.ArgumentParser
 
     parser.add_argument("--default-container",
                         help="Specify a default docker container that will be used if the workflow fails to specify one.")
+    parser.add_argument("--workdir", type=Text, default=None,
+                        help="Specify the working directory for docker run --workdir independently of --outdir")
     exgroup = parser.add_mutually_exclusive_group()
-    exgroup.add_argument("--docker-user", type=Text,
+    exgroup.add_argument("--docker-user", type=Text, default=None,
                         help="Specify the username for docker run --user", dest="docker_user")
     exgroup.add_argument("--no-match-user", action="store_true",
                         help="Disable passing the current uid to 'docker run --user`")
