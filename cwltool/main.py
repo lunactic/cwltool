@@ -190,12 +190,13 @@ def arg_parser():  # type: () -> argparse.ArgumentParser
 
     parser.add_argument("--default-container",
                         help="Specify a default docker container that will be used if the workflow fails to specify one.")
-    parser.add_argument("--no-match-user", action="store_true",
-                        help="Disable passing the current uid to 'docker run --user`")
     exgroup = parser.add_mutually_exclusive_group()
     exgroup.add_argument("--docker-user",  action="store_true",
                         help="Specify the username for docker run --user", dest="docker_user")
-    exgroup.add_argument("--disable-net", action="store_true",
+    exgroup.add_argument("--no-match-user", action="store_true",
+                        help="Disable passing the current uid to 'docker run --user`")
+    
+    parser.add_argument("--disable-net", action="store_true",
                         help="Use docker's default networking for containers;"
                              " the default is to enable networking.")
     parser.add_argument("--custom-net", type=Text,
