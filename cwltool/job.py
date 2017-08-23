@@ -388,7 +388,7 @@ class DockerCommandLineJob(JobBase):
         if self.generatemapper:
             self.add_volumes(self.generatemapper, runtime, True)
 
-        if kwargs.get("workdir") is not None
+        if kwargs.get("workdir") is not None:
             runtime.append(u"--workdir=%s" % (docker_windows_path_adjust(kwargs.get("workdir"))))
         else
             runtime.append(u"--workdir=%s" % (docker_windows_path_adjust(self.builder.outdir)))
