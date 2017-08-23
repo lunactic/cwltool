@@ -390,7 +390,7 @@ class DockerCommandLineJob(JobBase):
 
         if kwargs.get("workdir") is not None:
             runtime.append(u"--workdir=%s" % (docker_windows_path_adjust(kwargs.get("workdir"))))
-        else
+        else:
             runtime.append(u"--workdir=%s" % (docker_windows_path_adjust(self.builder.outdir)))
         #runtime.append(u"--read-only=true")
 
