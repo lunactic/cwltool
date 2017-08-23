@@ -403,11 +403,12 @@ class DockerCommandLineJob(JobBase):
         if not onWindows():  # MS Windows does not have getuid() or geteuid() functions
             euid, egid = euid or os.geteuid(), egid or os.getgid()
 
-        if kwargs.get("no_match_user", None) is False and (euid, egid) != (None, None):
-            runtime.append(u"--user=%d:%d" % (euid, egid))
         if kwargs.get("docker_user",None) is not None:
             runtime.append(u"--user={0}".format(kwargs.get("docker_user")))
 
+        if kwargs.get("no_match_user", None) is False and kwargs.get("docker_user",None) is None and (euid, egid) != (None, None):
+            runtime.append(u"--user=%d:%d" % (euid, egid))
+        
         if rm_container:
             runtime.append(u"--rm")
 
