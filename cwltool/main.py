@@ -194,7 +194,7 @@ def arg_parser():  # type: () -> argparse.ArgumentParser
                         help="Disable passing the current uid to 'docker run --user`")
     exgroup = parser.add_mutually_exclusive_group()
     exgroup.add_argument("--docker-user",  action="store_true",
-                        help="Specify the username for docker run --user")
+                        help="Specify the username for docker run --user", dest="docker_user")
     exgroup.add_argument("--disable-net", action="store_true",
                         help="Use docker's default networking for containers;"
                              " the default is to enable networking.")
