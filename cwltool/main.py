@@ -192,7 +192,7 @@ def arg_parser():  # type: () -> argparse.ArgumentParser
                         help="Specify a default docker container that will be used if the workflow fails to specify one.")
     parser.add_argument("--no-match-user", action="store_true",
                         help="Disable passing the current uid to 'docker run --user`")
-    parser.add_argument("--user",  action="store_true",
+    parser.add_argument("--docker-user",  action="store_true",
                         help="Specify the username for docker run --user")
     parser.add_argument("--disable-net", action="store_true",
                         help="Use docker's default networking for containers;"
