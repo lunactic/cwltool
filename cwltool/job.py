@@ -405,7 +405,7 @@ class DockerCommandLineJob(JobBase):
 
         if kwargs.get("no_match_user", None) is False and (euid, egid) != (None, None):
             runtime.append(u"--user=%d:%d" % (euid, egid))
-        if kwargs.get("user",None) is False:
+        if kwargs.get("user",None) is not None:
             runtime.append(u"--user={0}".format(kwargs.get("user")))
 
         if rm_container:
