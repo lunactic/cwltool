@@ -102,12 +102,13 @@ def get_from_requirements(r, req, pull_image, dry_run=False):
     # type: (Dict[Text, Text], bool, bool, bool) -> Text
     if r:
         errmsg = None
-        try:
-            subprocess.check_output(["docker", "version"])
-        except subprocess.CalledProcessError as e:
-            errmsg = "Cannot communicate with docker daemon: " + Text(e)
-        except OSError as e:
-            errmsg = "'docker' executable not found: " + Text(e)
+        ## disabled docker installation check because subprocess does not work well over ssh
+        #try:
+        #    subprocess.check_output(["docker", "version"])
+        #except subprocess.CalledProcessError as e:
+        #    errmsg = "Cannot communicate with docker daemon: " + Text(e)
+        #except OSError as e:
+        #    errmsg = "'docker' executable not found: " + Text(e)
 
         if errmsg:
             if req:
