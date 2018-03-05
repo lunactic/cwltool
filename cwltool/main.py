@@ -158,6 +158,12 @@ def arg_parser():  # type: () -> argparse.ArgumentParser
     exgroup.add_argument("--quiet", action="store_true", help="Only print warnings and errors.")
     exgroup.add_argument("--debug", action="store_true", help="Print even more logging")
 
+    parser.add_argument("--js-console", action="store_true", help="Enable javascript console output")
+    parser.add_argument("--user-space-docker-cmd",
+                        help="(Linux/OS X only) Specify a user space docker "
+                        "command (like udocker or dx-docker) that will be "
+                        "used to call 'pull' and 'run'")
+
     dependency_resolvers_configuration_help = argparse.SUPPRESS
     dependencies_directory_help = argparse.SUPPRESS
     use_biocontainers_help = argparse.SUPPRESS
@@ -235,6 +241,9 @@ def arg_parser():  # type: () -> argparse.ArgumentParser
     parser.add_argument("--force-docker-pull", action="store_true",
                         default=False, help="Pull latest docker image even if"
                                             " it is locally present", dest="force_docker_pull")
+    parser.add_argument("--no-read-only", action="store_true",
+                        default=False, help="Do not set root directoy in the"
+                                            " container as read-only", dest="no_read_only")
     parser.add_argument("workflow", type=Text, nargs="?", default=None)
     parser.add_argument("job_order", nargs=argparse.REMAINDER)
 
@@ -736,6 +745,7 @@ def main(argsl=None,  # type: List[str]
                      'cachedir': None,
                      'quiet': False,
                      'debug': False,
+                     'js_console': False,
                      'version': False,
                      'enable_dev': False,
                      'enable_ext': False,
@@ -916,6 +926,9 @@ def main(argsl=None,  # type: List[str]
             if out is not None:
 
                 def locToPath(p):
+                    for field in ("path", "nameext", "nameroot", "dirname"):
+                        if field in p:
+                            del p[field]
                     if p["location"].startswith("file://"):
                         p["path"] = uri_file_path(p["location"])
 
