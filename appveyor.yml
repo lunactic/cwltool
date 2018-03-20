@@ -12,10 +12,6 @@ environment:
       PYTHON_VERSION: "2.7.x"
       PYTHON_ARCH: "64"
 
-    - PYTHON: "C:\\Python33-x64"
-      PYTHON_VERSION: "3.3.x"
-      PYTHON_ARCH: "64"
-
     - PYTHON: "C:\\Python34-x64"
       PYTHON_VERSION: "3.4.x"
       PYTHON_ARCH: "64"
@@ -31,6 +27,7 @@ install:
   - "python -c \"import struct; print(struct.calcsize('P') * 8)\""
 
 build_script:
+  - "%CMD_IN_ENV% pip install -U setuptools pip"
   - "%CMD_IN_ENV% pip install ."
 
 
