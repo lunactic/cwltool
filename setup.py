@@ -16,7 +16,7 @@ except ImportError:
     tagger = egg_info_cmd.egg_info
 
 needs_pytest = {'pytest', 'test', 'ptr'}.intersection(sys.argv)
-pytest_runner = ['pytest-runner'] if needs_pytest else []
+pytest_runner = ['pytest-runner', 'pytest-cov'] if needs_pytest else []
 
 setup(name='cwltool',
       version='1.0',
@@ -45,7 +45,8 @@ setup(name='cwltool',
                                 'schemas/v1.1.0-dev1/salad/schema_salad/metaschema/*.md',
                                 'cwlNodeEngine.js',
                                 'cwlNodeEngineJSConsole.js',
-                                'extensions.yml']},
+                                'extensions.yml',
+                                'hello.simg']},
       include_package_data=True,
       install_requires=[
           'setuptools',
@@ -55,15 +56,21 @@ setup(name='cwltool',
           'shellescape >= 3.4.1, < 3.5',
           'schema-salad >= 2.6.20170927145003, < 3',
           'typing >= 3.5.3',
+          'mypy-extensions',
           'six >= 1.8.0',
+          'psutil',
+          'prov == 1.5.1',
+          'bagit >= 1.6.4',
       ],
       extras_require={
+          ':os.name=="posix"': ['subprocess32 >= 3.5.0'],
+          ':python_version<"3"': ['pathlib2 == 2.3.2'],
           'deps': ["galaxy-lib >= 17.09.3"]
       },
       python_requires='>=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, <4',
       setup_requires=[] + pytest_runner,
       test_suite='tests',
-      tests_require=['pytest', 'mock >= 2.0.0',],
+      tests_require=['pytest', 'mock >= 2.0.0'],
       entry_points={
           'console_scripts': ["cwltool=cwltool.main:main"]
       },

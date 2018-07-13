@@ -1,21 +1,17 @@
-from __future__ import absolute_import
-from __future__ import print_function
+from __future__ import absolute_import, print_function
 
 import argparse
-import logging
 import os
+from typing import (Any, AnyStr, Dict, List,  # pylint: disable=unused-import
+                    Optional, Sequence, Text, Union, cast)
 
-from typing import (Any, AnyStr, Dict, List, Sequence, Text, Union, cast)
-
-from . import loghandler
 from schema_salad.ref_resolver import file_uri
-from .process import (Process, shortname)
+
+from .loghandler import _logger
+from .process import Process, shortname  # pylint: disable=unused-import
 from .resolver import ga4gh_tool_registries
-from .software_requirements import (SOFTWARE_REQUIREMENTS_ENABLED)
-
-_logger = logging.getLogger("cwltool")
-
-DEFAULT_TMP_PREFIX = "tmp"
+from .software_requirements import SOFTWARE_REQUIREMENTS_ENABLED
+from .utils import DEFAULT_TMP_PREFIX
 
 
 def arg_parser():  # type: () -> argparse.ArgumentParser
@@ -26,9 +22,7 @@ def arg_parser():  # type: () -> argparse.ArgumentParser
                         help="Output directory, default current directory")
 
     parser.add_argument("--parallel", action="store_true", default=False,
-                        help="[experimental] Run jobs in parallel. "
-                             "Does not currently keep track of ResourceRequirements like the number of cores"
-                             "or memory and can overload this system")
+                        help="[experimental] Run jobs in parallel. ")
     envgroup = parser.add_mutually_exclusive_group()
     envgroup.add_argument("--preserve-environment", type=Text, action="append",
                         help="Preserve specific environment variable when "
@@ -120,6 +114,43 @@ def arg_parser():  # type: () -> argparse.ArgumentParser
                         type=float,
                         default=20)
 
+    provgroup = parser.add_argument_group("Options for recording provenance "
+                                          "information of the execution")
+    provgroup.add_argument("--provenance",
+                           help="Save provenance to specified folder as a "
+                           "Research Object that captures and aggregates "
+                           "workflow execution and data products.",
+                           type=Text)
+
+    provgroup.add_argument("--enable-user-provenance", default=False,
+                           action="store_true",
+                           help="Record user account info as part of provenance.",
+                           dest="user_provenance")
+    provgroup.add_argument("--disable-user-provenance", default=False,
+                           action="store_false",
+                           help="Do not record user account info in provenance.",
+                           dest="user_provenance")
+    provgroup.add_argument("--enable-host-provenance", default=False,
+                           action="store_true",
+                           help="Record host info as part of provenance.",
+                           dest="host_provenance")
+    provgroup.add_argument("--disable-host-provenance", default=False,
+                           action="store_false",
+                           help="Do not record host info in provenance.",
+                           dest="host_provenance")
+    provgroup.add_argument(
+        "--orcid", help="Record user ORCID identifier as part of "
+        "provenance, e.g. https://orcid.org/0000-0002-1825-0097 "
+        "or 0000-0002-1825-0097. Alternatively the environment variable "
+        "ORCID may be set.", dest="orcid", default=os.environ.get("ORCID"),
+        type=Text)
+    provgroup.add_argument(
+        "--full-name", help="Record full name of user as part of provenance, "
+        "e.g. Josiah Carberry. You may need to use shell quotes to preserve "
+        "spaces. Alternatively the environment variable CWL_FULL_NAME may "
+        "be set.", dest="cwl_full_name", default=os.environ.get("CWL_FULL_NAME"),
+        type=Text)
+
     exgroup = parser.add_mutually_exclusive_group()
     exgroup.add_argument("--print-rdf", action="store_true",
                          help="Print corresponding RDF graph for workflow and exit")
@@ -152,6 +183,11 @@ def arg_parser():  # type: () -> argparse.ArgumentParser
                         "timestamps to the errors, warnings, and "
                         "notifications.")
     parser.add_argument("--js-console", action="store_true", help="Enable javascript console output")
+    parser.add_argument("--disable-js-validation", action="store_true", help="Disable javascript validation.")
+    parser.add_argument("--js-hint-options-file",
+                        type=Text,
+                        help="File of options to pass to jshint."
+                        "This includes the added option \"includewarnings\". ")
     dockergroup = parser.add_mutually_exclusive_group()
     dockergroup.add_argument("--user-space-docker-cmd", metavar="CMD",
                         help="(Linux/OS X only) Specify a user space docker "
@@ -203,12 +239,12 @@ def arg_parser():  # type: () -> argparse.ArgumentParser
                         help="Specify a default docker container that will be used if the workflow fails to specify one.")
     parser.add_argument("--no-match-user", action="store_true",
                         help="Disable passing the current uid to `docker run --user`")
-    parser.add_argument("--disable-net", action="store_true",
-                        help="Use docker's default networking for containers;"
-                             " the default is to enable networking.")
     parser.add_argument("--custom-net", type=Text,
-                        help="Will be passed to `docker run` as the '--net' "
-                             "parameter. Implies '--enable-net'.")
+                        help="Passed to `docker run` as the '--net' "
+                             "parameter when NetworkAccess is true.")
+    parser.add_argument("--disable-validate", dest="do_validate",
+                        action="store_false", default=True,
+                        help=argparse.SUPPRESS)
 
     exgroup = parser.add_mutually_exclusive_group()
     exgroup.add_argument("--enable-ga4gh-tool-registry", action="store_true", help="Enable resolution using GA4GH tool registry API",
@@ -266,7 +302,7 @@ def get_default_args():
     Get default values of cwltool's command line options
     """
     ap = arg_parser()
-    args = ap.parse_args()
+    args = ap.parse_args([])
     return vars(args)
 
 
@@ -346,7 +382,7 @@ def add_argument(toolparser, name, inptype, records, description="",
                 return None
 
     ahelp = description.replace("%", "%%")
-    action = None  # type: Union[argparse.Action, Text]
+    action = None  # type: Optional[Union[argparse.Action, Text]]
     atype = None  # type: Any
 
     if inptype == "File":

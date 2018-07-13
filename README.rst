@@ -2,16 +2,26 @@
 Common Workflow Language tool description reference implementation
 ==================================================================
 
-CWL conformance tests: |Build Status| Travis CI: |Unix Build Status|
+CWL conformance tests: |Conformance Status| |Linux Status| |Windows Status| |Coverage Status|
 
-.. |Unix Build Status| image:: https://img.shields.io/travis/common-workflow-language/cwltool/master.svg?label=unix%20build
+
+.. |Conformance Status| image:: https://ci.commonwl.org/buildStatus/icon?job=cwltool-conformance
+   :target: https://ci.commonwl.org/job/cwltool-conformance/
+
+.. |Linux Status| image:: https://img.shields.io/travis/common-workflow-language/cwltool/master.svg?label=Linux%20builds
    :target: https://travis-ci.org/common-workflow-language/cwltool
 
+.. |Windows Status| image:: https://img.shields.io/appveyor/ci/mr-c/cwltool/master.svg?label=Windows%20builds
+   :target: https://ci.appveyor.com/project/mr-c/cwltool
+
+.. |Coverage Status| image:: https://img.shields.io/codecov/c/github/common-workflow-language/cwltool.svg
+  :target: https://codecov.io/gh/common-workflow-language/cwltool
+
 This is the reference implementation of the Common Workflow Language.  It is
-intended to feature complete and provide comprehensive validation of CWL
+intended to be feature complete and provide comprehensive validation of CWL
 files as well as provide other tools related to working with CWL.
 
-This is written and tested for Python ``2.7 and 3.x {x = 3, 4, 5, 6}``
+This is written and tested for `Python <https://www.python.org/>`_ ``2.7 and 3.x {x = 4, 5, 6}``
 
 The reference implementation consists of two packages.  The ``cwltool`` package
 is the primary Python module containing the reference implementation in the
@@ -78,6 +88,8 @@ List of all environment can be seen using:
 ``tox --listenvs``
 and running a specfic test env using:
 ``tox -e <env name>``
+and additionally run a specific test using this format:
+``tox -e py36-unit -- tests/test_examples.py::TestParamMatching``
 
 -  Running the entire suite of CWL conformance tests:
 
@@ -101,7 +113,7 @@ the default cwl-runner use::
 
 Use with boot2docker
 --------------------
-boot2docker is running docker inside a virtual machine and it only mounts ``Users``
+boot2docker runs Docker inside a virtual machine and it only mounts ``Users``
 on it. The default behavior of CWL is to create temporary directories under e.g.
 ``/Var`` which is not accessible to Docker containers.
 
@@ -110,14 +122,11 @@ and ``--tmp-outdir-prefix`` to somewhere under ``/Users``::
 
     $ cwl-runner --tmp-outdir-prefix=/Users/username/project --tmpdir-prefix=/Users/username/project wc-tool.cwl wc-job.json
 
-.. |Build Status| image:: https://ci.commonwl.org/buildStatus/icon?job=cwltool-conformance
-   :target: https://ci.commonwl.org/job/cwltool-conformance/
-
 Using user-space replacements for Docker
 ----------------------------------------
 
 Some shared computing environments don't support Docker software containers for technical or policy reasons.
-As a work around, the CWL reference runner supports using a alternative ``docker`` implementations on Linux
+As a work around, the CWL reference runner supports using alternative ``docker`` implementations on Linux
 with the ``--user-space-docker-cmd`` option.
 
 One such "user space" friendly docker replacement is ``udocker`` https://github.com/indigo-dc/udocker and another
@@ -132,8 +141,8 @@ Run `cwltool` just as you normally would, but with the new option, e.g. from the
 .. code:: bash
 
   cwltool --user-space-docker-cmd=udocker https://raw.githubusercontent.com/common-workflow-language/common-workflow-language/master/v1.0/v1.0/test-cwl-out2.cwl https://github.com/common-workflow-language/common-workflow-language/blob/master/v1.0/v1.0/empty.json
-  
-or 
+
+or
 
 .. code:: bash
 
@@ -167,7 +176,7 @@ Use with GA4GH Tool Registry API
 
 Cwltool can launch tools directly from `GA4GH Tool Registry API`_ endpoints.
 
-By default, cwltool searches https://dockstore.org/ .  Use --add-tool-registry to add other registries to the search path.
+By default, cwltool searches https://dockstore.org/ .  Use ``--add-tool-registry`` to add other registries to the search path.
 
 For example ::
 
@@ -199,7 +208,7 @@ The easiest way to use cwltool to run a tool or workflow from Python is to use a
   import cwltool.factory
   fac = cwltool.factory.Factory()
 
-  echo = f.make("echo.cwl")
+  echo = fac.make("echo.cwl")
   result = echo(inp="foo")
 
   # result["out"] == "foo"
@@ -220,7 +229,7 @@ installing cwltool. For instance::
 
 Installing cwltool in this fashion enables several new command line options.
 The most general of these options is ``--beta-dependency-resolvers-configuration``.
-This option allows one to specify a dependency resolvers configuration file.
+This option allows one to specify a dependency resolver's configuration file.
 This file may be specified as either XML or YAML and very simply describes various
 plugins to enable to "resolve" ``SoftwareRequirement`` dependencies.
 
@@ -500,7 +509,7 @@ Technical outline of how cwltool works internally, for maintainers.
 
 #. ``CommandLineTool`` job() objects yield a single runnable object.
 
-   #. The CommandLineTool ``job()`` method calls ``makeJobRunner()`` to create a
+   #. The CommandLineTool ``job()`` method calls ``make_job_runner()`` to create a
       ``CommandLineJob`` object
    #. The job method configures the CommandLineJob object by setting public
       attributes
@@ -532,13 +541,13 @@ executor
   A toplevel workflow execution loop, should synchronously execute a process
   object and return an output object.
 
-makeTool
+construct_tool_object
   ::
 
-    makeTool(toolpath_object, **kwargs)
+    construct_tool_object(toolpath_object, **kwargs)
       (Dict[Text, Any], **Any) -> Process
 
-  Construct a Process object from a document.
+  Hook to construct a Process object (eg CommandLineTool) object from a document.
 
 selectResources
   ::

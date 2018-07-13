@@ -1,32 +1,38 @@
 from __future__ import absolute_import
-import unittest
-import pytest
-import subprocess
-from os import path
+
+import json
+import logging
+import shutil
 import sys
+import tempfile
+import unittest
+from io import BytesIO, StringIO
 
-from io import StringIO
+import schema_salad.validate
 
-from cwltool.errors import WorkflowException
-from cwltool.utils import onWindows
-
-try:
-    reload
-except:
-    try:
-        from imp import reload
-    except:
-        from importlib import reload
-
+import cwltool.checker
 import cwltool.expression as expr
 import cwltool.factory
 import cwltool.pathmapper
 import cwltool.process
 import cwltool.workflow
-import schema_salad.validate
+from cwltool.errors import WorkflowException
 from cwltool.main import main
+from cwltool.utils import onWindows, subprocess
 
-from .util import get_data
+from .util import (get_data, get_windows_safe_factory, needs_docker,
+                   needs_singularity, windows_needs_docker)
+
+try:
+    reload
+except:  # pylint: disable=bare-except
+    try:
+        from imp import reload
+    except:
+        from importlib import reload
+
+
+
 
 sys.argv = ['']
 
@@ -131,22 +137,28 @@ class TestParamMatching(unittest.TestCase):
         self.assertEqual(expr.interpolate("$(foo[\"b\\'ar\"].baz) $(foo[\"b\\'ar\"].baz)", inputs), "true true")
         self.assertEqual(expr.interpolate("$(foo['b\\\"ar'].baz) $(foo['b\\\"ar'].baz)", inputs), "null null")
 
-
 class TestFactory(unittest.TestCase):
+
+    @windows_needs_docker
     def test_factory(self):
-        f = cwltool.factory.Factory()
+        f = get_windows_safe_factory()
         echo = f.make(get_data("tests/echo.cwl"))
         self.assertEqual(echo(inp="foo"), {"out": "foo\n"})
 
+    def test_factory_bad_outputs(self):
+        f = cwltool.factory.Factory()
+        with self.assertRaises(schema_salad.validate.ValidationException):
+            echo = f.make(get_data("tests/echo_broken_outputs.cwl"))
+
     def test_default_args(self):
         f = cwltool.factory.Factory()
-        assert f.execkwargs["use_container"] is True
-        assert f.execkwargs["on_error"] == "stop"
+        assert f.runtimeContext.use_container is True
+        assert f.runtimeContext.on_error == "stop"
 
     def test_redefined_args(self):
         f = cwltool.factory.Factory(use_container=False, on_error="continue")
-        assert f.execkwargs["use_container"] is False
-        assert f.execkwargs["on_error"] == "continue"
+        assert f.runtimeContext.use_container is False
+        assert f.runtimeContext.on_error == "continue"
 
     def test_partial_scatter(self):
         f = cwltool.factory.Factory(on_error="continue")
@@ -290,6 +302,14 @@ class TestScanDeps(unittest.TestCase):
             "location": "file:///example/bar.cwl"
         }], sc)
 
+    def test_trick_scandeps(self):
+        if sys.version_info[0] < 3:
+            stream = BytesIO()
+        else:
+            stream = StringIO()
+        main(["--print-deps", "--debug", get_data("tests/wf/trick_defaults.cwl")], stdout=stream)
+        self.assertNotEquals(json.loads(stream.getvalue())["secondaryFiles"][0]["location"][:2], "_:")
+
 
 class TestDedup(unittest.TestCase):
     def test_dedup(self):
@@ -394,124 +414,124 @@ class TestTypeCompare(unittest.TestCase):
         self.assertFalse(cwltool.workflow.can_assign_src_to_sink(src, {'items': 'string', 'type': 'array'}))
 
     def test_typecheck(self):
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['string', 'int'], ['string', 'int', 'null'], linkMerge=None, valueFrom=None),
             "pass")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['string', 'int'], ['string', 'null'], linkMerge=None, valueFrom=None),
             "warning")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['File', 'int'], ['string', 'null'], linkMerge=None, valueFrom=None),
             "exception")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             {'items': ['string', 'int'], 'type': 'array'},
             {'items': ['string', 'int', 'null'], 'type': 'array'},
             linkMerge=None, valueFrom=None),
             "pass")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             {'items': ['string', 'int'], 'type': 'array'},
             {'items': ['string', 'null'], 'type': 'array'},
             linkMerge=None, valueFrom=None),
             "warning")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             {'items': ['File', 'int'], 'type': 'array'},
             {'items': ['string', 'null'], 'type': 'array'},
             linkMerge=None, valueFrom=None),
             "exception")
 
         # check linkMerge when sinktype is not an array
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['string', 'int'], ['string', 'int', 'null'],
             linkMerge="merge_nested", valueFrom=None),
             "exception")
 
         # check linkMerge: merge_nested
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['string', 'int'],
             {'items': ['string', 'int', 'null'], 'type': 'array'},
             linkMerge="merge_nested", valueFrom=None),
             "pass")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['string', 'int'],
             {'items': ['string', 'null'], 'type': 'array'},
             linkMerge="merge_nested", valueFrom=None),
             "warning")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['File', 'int'],
             {'items': ['string', 'null'], 'type': 'array'},
             linkMerge="merge_nested", valueFrom=None),
             "exception")
 
         # check linkMerge: merge_nested and sinktype is "Any"
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['string', 'int'], "Any",
             linkMerge="merge_nested", valueFrom=None),
             "pass")
 
         # check linkMerge: merge_flattened
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['string', 'int'],
             {'items': ['string', 'int', 'null'], 'type': 'array'},
             linkMerge="merge_flattened", valueFrom=None),
             "pass")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['string', 'int'],
             {'items': ['string', 'null'], 'type': 'array'},
             linkMerge="merge_flattened", valueFrom=None),
             "warning")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['File', 'int'],
             {'items': ['string', 'null'], 'type': 'array'},
             linkMerge="merge_flattened", valueFrom=None),
             "exception")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             {'items': ['string', 'int'], 'type': 'array'},
             {'items': ['string', 'int', 'null'], 'type': 'array'},
             linkMerge="merge_flattened", valueFrom=None),
             "pass")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             {'items': ['string', 'int'], 'type': 'array'},
             {'items': ['string', 'null'], 'type': 'array'},
             linkMerge="merge_flattened", valueFrom=None),
             "warning")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             {'items': ['File', 'int'], 'type': 'array'},
             {'items': ['string', 'null'], 'type': 'array'},
             linkMerge="merge_flattened", valueFrom=None),
             "exception")
 
         # check linkMerge: merge_flattened and sinktype is "Any"
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             ['string', 'int'], "Any",
             linkMerge="merge_flattened", valueFrom=None),
             "pass")
 
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             {'items': ['string', 'int'], 'type': 'array'}, "Any",
             linkMerge="merge_flattened", valueFrom=None),
             "pass")
 
         # check linkMerge: merge_flattened when srctype is a list
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             [{'items': 'string', 'type': 'array'}],
             {'items': 'string', 'type': 'array'},
             linkMerge="merge_flattened", valueFrom=None),
             "pass")
 
         # check valueFrom
-        self.assertEquals(cwltool.workflow.check_types(
+        self.assertEquals(cwltool.checker.check_types(
             {'items': ['File', 'int'], 'type': 'array'},
             {'items': ['string', 'null'], 'type': 'array'},
             linkMerge="merge_flattened", valueFrom="special value"),
@@ -546,11 +566,54 @@ class TestTypeCompare(unittest.TestCase):
         # mismatches its sink type.
         with self.assertRaises(schema_salad.validate.ValidationException):
             f = cwltool.factory.Factory()
-            f.make("tests/checker_wf/broken-wf.cwl")
+            f.make(get_data("tests/checker_wf/broken-wf.cwl"))
         with self.assertRaises(schema_salad.validate.ValidationException):
             f = cwltool.factory.Factory()
-            f.make("tests/checker_wf/broken-wf2.cwl")
+            f.make(get_data("tests/checker_wf/broken-wf2.cwl"))
 
+    def test_var_spool_cwl_checker1(self):
+        """ Confirm that references to /var/spool/cwl are caught."""
+
+        stream = StringIO()
+        streamhandler = logging.StreamHandler(stream)
+        _logger = logging.getLogger("cwltool")
+        _logger.addHandler(streamhandler)
+
+        try:
+            f = cwltool.factory.Factory()
+            f.make(get_data("tests/non_portable.cwl"))
+            self.assertIn("non_portable.cwl:18:4: Non-portable reference to /var/spool/cwl detected", stream.getvalue())
+        finally:
+            _logger.removeHandler(streamhandler)
+
+    def test_var_spool_cwl_checker2(self):
+        """ Confirm that references to /var/spool/cwl are caught."""
+
+        stream = StringIO()
+        streamhandler = logging.StreamHandler(stream)
+        _logger = logging.getLogger("cwltool")
+        _logger.addHandler(streamhandler)
+
+        try:
+            f = cwltool.factory.Factory()
+            f.make(get_data("tests/non_portable2.cwl"))
+            self.assertIn("non_portable2.cwl:19:4: Non-portable reference to /var/spool/cwl detected", stream.getvalue())
+        finally:
+            _logger.removeHandler(streamhandler)
+
+    def test_var_spool_cwl_checker3(self):
+        """ Confirm that references to /var/spool/cwl are caught."""
+
+        stream = StringIO()
+        streamhandler = logging.StreamHandler(stream)
+        _logger = logging.getLogger("cwltool")
+        _logger.addHandler(streamhandler)
+        try:
+            f = cwltool.factory.Factory()
+            f.make(get_data("tests/portable.cwl"))
+            self.assertNotIn("Non-portable reference to /var/spool/cwl detected", stream.getvalue())
+        finally:
+            _logger.removeHandler(streamhandler)
 
 class TestPrintDot(unittest.TestCase):
     def test_print_dot(self):
@@ -591,24 +654,38 @@ class TestJsConsole(TestCmdLine):
             self.assertNotIn("[err] Error message", stderr)
 
 
-@pytest.mark.skipif(onWindows(),
-                    reason="Instance of cwltool is used, on Windows it invokes a default docker container"
-                           "which is not supported on AppVeyor")
+@needs_docker
 class TestCache(TestCmdLine):
+    def setUp(self):
+        self.cache_dir = tempfile.mkdtemp("cwltool_cache")
+
+    def tearDown(self):
+        shutil.rmtree(self.cache_dir)
+
     def test_wf_without_container(self):
         test_file = "hello-workflow.cwl"
-        error_code, stdout, stderr = self.get_main_output(["--cachedir", "cache",
+        error_code, stdout, stderr = self.get_main_output(["--cachedir", self.cache_dir,
                                                    get_data("tests/wf/" + test_file), "--usermessage", "hello"])
         self.assertIn("completed success", stderr)
         self.assertEquals(error_code, 0)
 
-@pytest.mark.skipif(onWindows(),
-                    reason="Instance of cwltool is used, on Windows it invokes a default docker container"
-                           "which is not supported on AppVeyor")
+    def test_issue_740_fixed(self):
+        test_file = "cache_test_workflow.cwl"
+        error_code, stdout, stderr = self.get_main_output(["--cachedir", self.cache_dir, get_data("tests/wf/" + test_file)])
+        self.assertIn("completed success", stderr)
+        self.assertEquals(error_code, 0)
+
+        error_code, stdout, stderr = self.get_main_output(["--cachedir", self.cache_dir, get_data("tests/wf/" + test_file)])
+        self.assertNotIn("Output of job will be cached in", stderr)
+        self.assertEquals(error_code, 0)
+
+
+@needs_docker
 class TestChecksum(TestCmdLine):
 
     def test_compute_checksum(self):
-        f = cwltool.factory.Factory(compute_checksum=True, use_container=False)
+        f = cwltool.factory.Factory(compute_checksum=True,
+                use_container=onWindows())
         echo = f.make(get_data("tests/wf/cat-tool.cwl"))
         output = echo(file1={
                 "class": "File",
@@ -627,6 +704,22 @@ class TestChecksum(TestCmdLine):
         self.assertEquals(error_code, 0)
         self.assertNotIn("checksum", stdout)
 
+
+@needs_singularity
+class TestChecksumSingularity(TestCmdLine):
+
+    def setUp(self):
+        self.cache_dir = tempfile.mkdtemp("cwltool_cache")
+
+    def tearDown(self):
+        shutil.rmtree(self.cache_dir)
+
+    def test_singularity_workflow(self):
+        error_code, stdout, stderr = self.get_main_output(
+            ['--singularity', '--default-container', 'debian',
+             get_data("tests/wf/hello-workflow.cwl"), "--usermessage", "hello"])
+        self.assertIn("completed success", stderr)
+        self.assertEquals(error_code, 0)
 
 if __name__ == '__main__':
     unittest.main()

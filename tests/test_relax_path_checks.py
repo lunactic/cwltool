@@ -1,13 +1,15 @@
 from __future__ import absolute_import
+
 import unittest
-import pytest
 from tempfile import NamedTemporaryFile
 
 from cwltool.main import main
-from cwltool.utils import onWindows
+
+from .util import needs_docker
 
 
 class ToolArgparse(unittest.TestCase):
+    """Tests for generating --help dynamically."""
     script = '''
 #!/usr/bin/env cwl-runner
 cwlVersion: v1.0
@@ -26,8 +28,7 @@ stdout: test.txt
 baseCommand: [cat]
 '''
 
-    @pytest.mark.skipif(onWindows(),
-                        reason="Instance of Cwltool is used, On windows that invoke a default docker Container")
+    @needs_docker
     def test_spaces_in_input_files(self):
         with NamedTemporaryFile(mode='w', delete=False) as f:
             f.write(self.script)
