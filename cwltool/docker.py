@@ -206,7 +206,7 @@ class DockerCommandLineJob(ContainerCommandLineJob):
                 if not vol.resolved.startswith("_:"):
                     _check_docker_machine_path(docker_windows_path_adjust(
                         vol.resolved))
-                    runtime.append(u"--volume=%s:%s:ro" % (
+                    runtime.append(u"--volume=%s:%s:rw" % (
                         docker_windows_path_adjust(vol.resolved),
                         docker_windows_path_adjust(vol.target)))
             elif vol.type == "WritableFile":
@@ -339,6 +339,6 @@ class DockerCommandLineJob(ContainerCommandLineJob):
         for t, v in self.environment.items():
             runtime.append(u"--env=%s=%s" % (t, v))
 
-        runtime.append("--memory=%dm" % self.builder.resources["ram"])
+        # runtime.append("--memory=%dm" % self.builder.resources["ram"])
 
         return runtime
