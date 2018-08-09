@@ -10,14 +10,16 @@ import functools
 import io
 import logging
 import os
+import signal
 import sys
 
-from typing import (IO, Any, Callable, Dict,  # pylint: disable=unused-import
-                    Iterable, List, Mapping, MutableMapping, Optional, Text,
-                    TextIO, Tuple, Union, cast)
+from typing import (IO, Any, Callable, Dict, Iterable, List, Mapping,
+                    MutableMapping, Optional, TextIO, Tuple, Union, cast)
+from typing_extensions import Text  # pylint: disable=unused-import
+# move to a regular typing import when Python 3.3-3.6 is no longer supported
 import pkg_resources  # part of setuptools
-import ruamel.yaml as yaml
-import schema_salad.validate as validate
+from ruamel import yaml
+from schema_salad import validate
 from schema_salad.ref_resolver import Loader, file_uri, uri_file_path
 from schema_salad.sourceline import strip_dup_lineno
 import six
@@ -38,7 +40,7 @@ from .pack import pack
 from .pathmapper import (adjustDirObjs, normalizeFilesDirs, trim_listing,
                          visit_class)
 from .process import (Process, scandeps,   # pylint: disable=unused-import
-                      shortname, use_custom_schema, use_standard_schema)
+                      shortname, use_custom_schema, use_standard_schema, add_sizes)
 from .provenance import ResearchObject
 from .resolver import ga4gh_tool_registries, tool_resolver
 from .secrets import SecretStore
@@ -46,10 +48,43 @@ from .software_requirements import (DependenciesConfiguration,
                                     get_container_from_software_requirements)
 from .stdfsaccess import StdFsAccess
 from .update import ALLUPDATES, UPDATES
-from .utils import (DEFAULT_TMP_PREFIX, add_sizes, json_dumps, onWindows,
-                    versionstring, windows_default_container_id)
+from .utils import (DEFAULT_TMP_PREFIX, json_dumps, onWindows,
+                    versionstring, windows_default_container_id,
+                    processes_to_kill)
 from .context import LoadingContext, RuntimeContext, getdefault
-from .builder import HasReqsHints
+from .builder import HasReqsHints  # pylint: disable=unused-import
+
+
+def _terminate_processes():
+    # type: () -> None
+    """Kill all spawned processes.
+
+    Processes to be killed must be appended to `utils.processes_to_kill`
+    as they are spawned.
+
+    An important caveat: since there's no supported way to kill another
+    thread in Python, this function cannot stop other threads from
+    continuing to execute while it kills the processes that they've
+    spawned. This may occasionally lead to unexpected behaviour.
+    """
+    # It's possible that another thread will spawn a new task while
+    # we're executing, so it's not safe to use a for loop here.
+    while processes_to_kill:
+        processes_to_kill.popleft().kill()
+
+
+def _signal_handler(signum, _):
+    # type: (int, Any) -> None
+    """Kill all spawned processes and exit.
+
+    Note that it's possible for another thread to spawn a process after
+    all processes have been killed, but before Python exits.
+
+    Refer to the docstring for _terminate_processes() for other caveats.
+    """
+    _terminate_processes()
+    sys.exit(signum)
+
 
 def generate_example_input(inptype):
     # type: (Union[Text, Dict[Text, Any]]) -> Any
@@ -73,17 +108,16 @@ def generate_example_input(inptype):
             inptype.remove('null')
             return generate_example_input(inptype[0])
             # TODO: indicate that this input is optional
-        else:
-            raise Exception("multi-types other than optional not yet supported"
-                            " for generating example input objects: %s"
-                            % inptype)
+        raise Exception("multi-types other than optional not yet supported"
+                        " for generating example input objects: "
+                        "{}".format(inptype))
     if isinstance(inptype, collections.Mapping) and 'type' in inptype:
         if inptype['type'] == 'array':
             return [generate_example_input(inptype['items'])]
-        elif inptype['type'] == 'enum':
+        if inptype['type'] == 'enum':
             return 'valid_enum_value'
             # TODO: list valid values in a comment
-        elif inptype['type'] == 'record':
+        if inptype['type'] == 'record':
             record = {}
             for field in inptype['fields']:
                 record[shortname(field['name'])] = generate_example_input(
@@ -92,6 +126,7 @@ def generate_example_input(inptype):
     elif isinstance(inptype, string_types):
         return defaults.get(Text(inptype), 'custom_type')
         # TODO: support custom types, complex arrays
+    return None
 
 
 def generate_input_template(tool):
@@ -147,12 +182,11 @@ def init_job_order(job_order_object,        # type: Optional[MutableMapping[Text
                    loader,                  # type: Loader
                    stdout,                  # type: Union[TextIO, StreamWriter]
                    print_input_deps=False,  # type: bool
-                   provArgs=None,           # type: ResearchObject
                    relative_deps=False,     # type: bool
-                   make_fs_access=None,     # type: Callable[[Text], StdFsAccess]
+                   make_fs_access=StdFsAccess,  # type: Callable[[Text], StdFsAccess]
                    input_basedir="",        # type: Text
                    secret_store=None        # type: SecretStore
-                  ):  # type: (...) -> Tuple[MutableMapping[Text, Any], Optional[MutableMapping[Text, Any]]]
+                  ):  # type: (...) -> MutableMapping[Text, Any]
     secrets_req, _ = t.get_requirement("http://commonwl.org/cwltool#Secrets")
     if not job_order_object:
         namemap = {}  # type: Dict[Text, Text]
@@ -215,18 +249,13 @@ def init_job_order(job_order_object,        # type: Optional[MutableMapping[Text
             exit(1)
         else:
             job_order_object = {}
-    if provArgs:
-        jobobj_for_prov = copy.deepcopy(job_order_object)
-        input_for_prov = printdeps(
-            jobobj_for_prov, loader, stdout, relative_deps, "", provArgs,
-            basedir=file_uri(str(input_basedir) + "/"))
 
     if print_input_deps:
         printdeps(job_order_object, loader, stdout, relative_deps, "",
                   basedir=file_uri(str(input_basedir) + "/"))
         exit(0)
 
-    def pathToLoc(p):
+    def path_to_loc(p):
         if "location" not in p and "path" in p:
             p["location"] = p["path"]
             del p["path"]
@@ -239,8 +268,8 @@ def init_job_order(job_order_object,        # type: Optional[MutableMapping[Text
         if "format" in p:
             p["format"] = ld.expand_url(p["format"], "")
 
-    visit_class(job_order_object, ("File", "Directory"), pathToLoc)
-    visit_class(job_order_object, ("File",), add_sizes)
+    visit_class(job_order_object, ("File", "Directory"), path_to_loc)
+    visit_class(job_order_object, ("File",), functools.partial(add_sizes, make_fs_access(input_basedir)))
     visit_class(job_order_object, ("File",), expand_formats)
     adjustDirObjs(job_order_object, trim_listing)
     normalizeFilesDirs(job_order_object)
@@ -253,9 +282,7 @@ def init_job_order(job_order_object,        # type: Optional[MutableMapping[Text
         del job_order_object["cwl:tool"]
     if "id" in job_order_object:
         del job_order_object["id"]
-    if provArgs:
-        return (job_order_object, input_for_prov[1])
-    return (job_order_object, None)
+    return job_order_object
 
 
 
@@ -275,7 +302,7 @@ def printdeps(obj,              # type: Optional[Mapping[Text, Any]]
               stdout,           # type: Union[TextIO, StreamWriter]
               relative_deps,    # type: bool
               uri,              # type: Text
-              provArgs=None,    # type: Any
+              prov_args=None,   # type: Any
               basedir=None      # type: Text
              ):  # type: (...) -> Tuple[Optional[Dict[Text, Any]], Optional[Dict[Text, Any]]]
     """Print a JSON representation of the dependencies of the CWL document."""
@@ -299,7 +326,7 @@ def printdeps(obj,              # type: Optional[Mapping[Text, Any]]
             raise Exception(u"Unknown relative_deps %s" % relative_deps)
         absdeps = copy.deepcopy(deps)
         visit_class(deps, ("File", "Directory"), functools.partial(make_relative, base))
-    if provArgs:
+    if prov_args:
         return (deps, absdeps)
     stdout.write(json_dumps(deps, indent=4))
     return (None, None)
@@ -316,7 +343,7 @@ def print_pack(document_loader,  # type: Loader
     return json_dumps(packed["$graph"][0], indent=4)
 
 
-def supportedCWLversions(enable_dev):  # type: (bool) -> List[Text]
+def supported_cwl_versions(enable_dev):  # type: (bool) -> List[Text]
     # ALLUPDATES and UPDATES are dicts
     if enable_dev:
         versions = list(ALLUPDATES)
@@ -356,7 +383,6 @@ def main(argsl=None,                   # type: List[str]
     _logger.addHandler(stderr_handler)
     # pre-declared for finally block
     workflowobj = None
-    input_for_prov = None
     try:
         if args is None:
             if argsl is None:
@@ -398,11 +424,10 @@ def main(argsl=None,                   # type: List[str]
         if args.version:
             print(versionfunc())
             return 0
-        else:
-            _logger.info(versionfunc())
+        _logger.info(versionfunc())
 
         if args.print_supported_versions:
-            print("\n".join(supportedCWLversions(args.enable_dev)))
+            print("\n".join(supported_cwl_versions(args.enable_dev)))
             return 0
 
         if not args.workflow:
@@ -565,12 +590,13 @@ def main(argsl=None,                   # type: List[str]
             runtimeContext.tmp_outdir_prefix = args.cachedir
 
         runtimeContext.secret_store = getdefault(runtimeContext.secret_store, SecretStore())
+        runtimeContext.make_fs_access = getdefault(runtimeContext.make_fs_access, StdFsAccess)
         try:
-            initialized_job_order_object, input_for_prov = init_job_order(
+            initialized_job_order_object = init_job_order(
                 job_order_object, args, tool, jobloader, stdout,
                 print_input_deps=args.print_input_deps,
-                provArgs=runtimeContext.research_obj,
                 relative_deps=args.relative_deps,
+                make_fs_access=runtimeContext.make_fs_access,
                 input_basedir=input_basedir,
                 secret_store=runtimeContext.secret_store)
         except SystemExit as err:
@@ -592,13 +618,13 @@ def main(argsl=None,                   # type: List[str]
             conf_file = getattr(args, "beta_dependency_resolvers_configuration", None)  # Text
             use_conda_dependencies = getattr(args, "beta_conda_dependencies", None)  # Text
 
-            job_script_provider = None  # type: Optional[DependenciesConfiguration]
             if conf_file or use_conda_dependencies:
                 runtimeContext.job_script_provider = DependenciesConfiguration(args)
 
-            runtimeContext.find_default_container = \
-                functools.partial(find_default_container, args)
-            runtimeContext.make_fs_access = getdefault(runtimeContext.make_fs_access, StdFsAccess)
+            runtimeContext.find_default_container = functools.partial(
+                find_default_container,
+                default_container=runtimeContext.default_container,
+                use_biocontainers=args.beta_use_biocontainers)
             (out, status) = executor(tool,
                                      initialized_job_order_object,
                                      runtimeContext,
@@ -661,12 +687,6 @@ def main(argsl=None,                   # type: List[str]
             prov_dep = prov_dependencies[1]
             assert prov_dep
             runtimeContext.research_obj.generate_snapshot(prov_dep)
-            #for input file dependencies
-            if input_for_prov:
-                runtimeContext.research_obj.generate_snapshot(input_for_prov)
-            #NOTE: keep these commented out lines to evaluate tests later
-            #if job_order_object:
-                #runtimeContext.research_obj.generate_snapshot(job_order_object)
 
             runtimeContext.research_obj.close(args.provenance)
 
@@ -674,16 +694,26 @@ def main(argsl=None,                   # type: List[str]
         _logger.addHandler(defaultStreamHandler)
 
 
-def find_default_container(args, builder):
-    # type: (argparse.Namespace, HasReqsHints) -> Optional[Text]
-    default_container = None
-    if args.default_container:
-        default_container = args.default_container
-    elif args.beta_use_biocontainers:
-        default_container = get_container_from_software_requirements(args, builder)
-
+def find_default_container(builder,                  # type: HasReqsHints
+                           default_container=None,   # type: Text
+                           use_biocontainers=None,  # type: bool
+                          ):  # type: (...) -> Optional[Text]
+    """Default finder for default containers."""
+    if not default_container and use_biocontainers:
+        default_container = get_container_from_software_requirements(
+            use_biocontainers, builder)
     return default_container
 
 
+def run(*args, **kwargs):
+    # type: (...) -> None
+    """Run cwltool."""
+    signal.signal(signal.SIGTERM, _signal_handler)
+    try:
+        sys.exit(main(*args, **kwargs))
+    finally:
+        _terminate_processes()
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    run(sys.argv[1:])

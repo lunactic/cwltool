@@ -7,12 +7,13 @@ import datetime
 import random
 import tempfile
 from collections import namedtuple
-from typing import (Any, Callable, Dict,  # pylint: disable=unused-import
-                    Generator, Iterable, List, Optional,
-                    Text, Tuple, Union, cast)
+from typing import (Any, Callable, Dict, Generator, Iterable, List, Optional,
+                    Tuple, Union)
+from typing_extensions import Text  # pylint: disable=unused-import
+# move to a regular typing import when Python 3.3-3.6 is no longer supported
 
 from ruamel.yaml.comments import CommentedMap
-import schema_salad.validate as validate
+from schema_salad import validate
 from schema_salad.sourceline import SourceLine
 import six
 from six import string_types
@@ -24,6 +25,7 @@ from .checker import can_assign_src_to_sink, static_checker
 from .errors import WorkflowException
 from .load_tool import load_tool
 from .loghandler import _logger
+from .pathmapper import adjustDirObjs, get_listing
 from .mutation import MutationManager  # pylint: disable=unused-import
 from .process import Process, get_overrides, shortname, uniquename
 from .software_requirements import (  # pylint: disable=unused-import
@@ -32,7 +34,8 @@ from .stdfsaccess import StdFsAccess
 from .provenance import CreateProvProfile
 from .utils import DEFAULT_TMP_PREFIX, aslist, json_dumps
 from . import context
-from .context import LoadingContext, RuntimeContext, getdefault
+from .context import (LoadingContext,  # pylint: disable=unused-import
+                      RuntimeContext, getdefault)
 
 WorkflowStateItem = namedtuple('WorkflowStateItem', ['parameter', 'value', 'success'])
 
@@ -45,9 +48,9 @@ def default_make_tool(toolpath_object,      # type: Dict[Text, Any]
     if "class" in toolpath_object:
         if toolpath_object["class"] == "CommandLineTool":
             return command_line_tool.CommandLineTool(toolpath_object, loadingContext)
-        elif toolpath_object["class"] == "ExpressionTool":
+        if toolpath_object["class"] == "ExpressionTool":
             return command_line_tool.ExpressionTool(toolpath_object, loadingContext)
-        elif toolpath_object["class"] == "Workflow":
+        if toolpath_object["class"] == "Workflow":
             return Workflow(toolpath_object, loadingContext)
 
     raise WorkflowException(
@@ -135,13 +138,14 @@ def object_from_state(state,                  # Dict[Text, WorkflowStateItem]
         if sourceField in inp:
             connections = aslist(inp[sourceField])
             if (len(connections) > 1 and
-                not supportsMultipleInput):
+                    not supportsMultipleInput):
                 raise WorkflowException(
                     "Workflow contains multiple inbound links to a single "
                     "parameter but MultipleInputFeatureRequirement is not "
                     "declared.")
             for src in connections:
-                if src in state and state[src] is not None and (state[src].success == "success" or incomplete):
+                if src in state and state[src] is not None \
+                        and (state[src].success == "success" or incomplete):
                     if not match_types(
                             inp["type"], state[src], iid, inputobj,
                             inp.get("linkMerge", ("merge_nested"
@@ -253,6 +257,8 @@ class WorkflowJob(object):
                 datetime.datetime.now())
             self.prov_obj.finalize_prov_profile(str(self.name))
         _logger.info(u"[%s] completed %s", self.name, self.processStatus)
+        if _logger.isEnabledFor(logging.DEBUG):
+            _logger.debug(u"[%s] %s", self.name, json_dumps(wo, indent=4))
 
         self.did_callback = True
 
@@ -335,18 +341,19 @@ class WorkflowJob(object):
                 for k, v in io.items():
                     if k in loadContents and v.get("contents") is None:
                         with fs_access.open(v["location"], "rb") as f:
-                            v["contents"] = f.read(CONTENT_LIMIT)
+                            v["contents"] = f.read(CONTENT_LIMIT).decode("utf-8")
 
                 def valueFromFunc(k, v):  # type: (Any, Any) -> Any
                     if k in valueFrom:
+                        adjustDirObjs(v, functools.partial(get_listing,
+                            fs_access, recursive=True))
                         return expression.do_eval(
                             valueFrom[k], shortio, self.workflow.requirements,
                             None, None, {}, context=v,
                             debug=runtimeContext.debug,
                             js_console=runtimeContext.js_console,
                             timeout=runtimeContext.eval_timeout)
-                    else:
-                        return v
+                    return v
 
                 return {k: valueFromFunc(k, v) for k, v in io.items()}
 
@@ -358,7 +365,6 @@ class WorkflowJob(object):
                 runtimeContext = runtimeContext.copy()
                 runtimeContext.postScatterEval = postScatterEval
 
-                tot = 1
                 emptyscatter = [shortname(s) for s in scatter if len(inputobj[s]) == 0]
                 if emptyscatter:
                     _logger.warning(
@@ -412,6 +418,9 @@ class WorkflowJob(object):
            ):  # type: (...) -> Generator
         self.state = {}
         self.processStatus = "success"
+
+        if _logger.isEnabledFor(logging.DEBUG):
+            _logger.debug(u"[%s] %s", self.name, json_dumps(joborder, indent=4))
 
         runtimeContext = runtimeContext.copy()
         runtimeContext.outdir = None
@@ -852,9 +861,12 @@ def dotproduct_scatter(process,           # type: WorkflowJobStep
     return parallel_steps(steps, rc, runtimeContext)
 
 
-def nested_crossproduct_scatter(process, joborder, scatter_keys, output_callback,
-                                runtimeContext):
-    # type: (WorkflowJobStep, Dict[Text, Any], List[Text], Callable[..., Any], RuntimeContext) -> Generator
+def nested_crossproduct_scatter(process,          # type: WorkflowJobStep
+                                joborder,         # type: Dict[Text, Any]
+                                scatter_keys,     # type: List[Text]
+                                output_callback,  # type: Callable[..., Any]
+                                runtimeContext    # type: RuntimeContext
+                               ):  #type: (...) -> Generator
     scatter_key = scatter_keys[0]
     jobl = len(joborder[scatter_key])
     output = {}  # type: Dict[Text, List[Optional[Text]]]

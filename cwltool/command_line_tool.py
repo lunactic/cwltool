@@ -9,12 +9,14 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 from functools import cmp_to_key, partial
-from typing import (Any, Callable, Dict,  # pylint: disable=unused-import
-                    Generator, List, Optional, Set, Text, Type, TYPE_CHECKING,
-                    Union, cast)
+from typing import (Any, Callable, Dict, Generator, List, Optional, Set, Union,
+                    cast)
+from typing_extensions import Text, Type, TYPE_CHECKING  # pylint: disable=unused-import
+# move to a regular typing import when Python 3.3-3.6 is no longer supported
 
-import schema_salad.validate as validate
+from schema_salad import validate
 from schema_salad.ref_resolver import file_uri, uri_file_path
 from schema_salad.sourceline import SourceLine
 import shellescape
@@ -49,8 +51,8 @@ if TYPE_CHECKING:
 ACCEPTLIST_EN_STRICT_RE = re.compile(r"^[a-zA-Z0-9._+-]+$")
 ACCEPTLIST_EN_RELAXED_RE = re.compile(r".*")  # Accept anything
 ACCEPTLIST_RE = ACCEPTLIST_EN_STRICT_RE
-DEFAULT_CONTAINER_MSG =\
-"""We are on Microsoft Windows and not all components of this CWL description have a
+DEFAULT_CONTAINER_MSG = """
+We are on Microsoft Windows and not all components of this CWL description have a
 container specified. This means that these steps will be executed in the default container,
 which is %s.
 
@@ -91,9 +93,9 @@ class ExpressionTool(Process):
                 ev = self.builder.do_eval(self.script)
                 normalizeFilesDirs(ev)
                 self.output_callback(ev, "success")
-            except Exception as e:
+            except Exception as err:
                 _logger.warning(u"Failed to evaluate expression:\n%s",
-                             e, exc_info=runtimeContext.debug)
+                                err, exc_info=runtimeContext.debug)
                 self.output_callback({}, "permanentFail")
 
     def job(self,
@@ -237,21 +239,22 @@ class CommandLineTool(Process):
                         "dockerPull": default_container
                     })
                     dockerReq = self.requirements[0]
-                    if default_container == windows_default_container_id and runtimeContext.use_container and onWindows():
-                        _logger.warning(DEFAULT_CONTAINER_MSG % (windows_default_container_id, windows_default_container_id))
+                    if default_container == windows_default_container_id \
+                            and runtimeContext.use_container and onWindows():
+                        _logger.warning(
+                            DEFAULT_CONTAINER_MSG, windows_default_container_id,
+                            windows_default_container_id)
 
         if dockerReq and runtimeContext.use_container:
             if runtimeContext.singularity:
                 return SingularityCommandLineJob
-            else:
-                return DockerCommandLineJob
-        else:
-            for t in reversed(self.requirements):
-                if t["class"] == "DockerRequirement":
-                    raise UnsupportedRequirement(
-                        "--no-container, but this CommandLineTool has "
-                        "DockerRequirement under 'requirements'.")
-            return CommandLineJob
+            return DockerCommandLineJob
+        for t in reversed(self.requirements):
+            if t["class"] == "DockerRequirement":
+                raise UnsupportedRequirement(
+                    "--no-container, but this CommandLineTool has "
+                    "DockerRequirement under 'requirements'.")
+        return CommandLineJob
 
     def make_path_mapper(self, reffiles, stagedir, runtimeContext, separateDirs):
         # type: (List[Any], Text, RuntimeContext, bool) -> PathMapper
@@ -295,10 +298,10 @@ class CommandLineTool(Process):
                                                  separateDirs=False)
             _check_adjust = partial(check_adjust, cachebuilder)
             visit_class([cachebuilder.files, cachebuilder.bindings],
-                       ("File", "Directory"), _check_adjust)
+                        ("File", "Directory"), _check_adjust)
 
             cmdline = flatten(list(map(cachebuilder.generate_arg, cachebuilder.bindings)))
-            (docker_req, docker_is_req) = self.get_requirement("DockerRequirement")
+            (docker_req, _) = self.get_requirement("DockerRequirement")
             if docker_req and runtimeContext.use_container:
                 dockerimg = docker_req.get("dockerImageId") or docker_req.get("dockerPull")
             elif runtimeContext.default_container is not None and runtimeContext.use_container:
@@ -311,19 +314,23 @@ class CommandLineTool(Process):
                 # not really run using docker, just for hashing purposes
             keydict = {u"cmdline": cmdline}
 
-            if "stdout" in self.tool:
-                keydict["stdout"] = self.tool["stdout"]
-            for location, f in cachebuilder.pathmapper.items():
-                if f.type == "File":
-                    checksum = next((e['checksum'] for e in cachebuilder.files
-                            if 'location' in e and e['location'] == location
-                            and 'checksum' in e
-                            and e['checksum'] != 'sha1$hash'), None)
-                    st = os.stat(f.resolved)
+            for shortcut in ["stdout", "stderr"]:  # later, add "stdin"
+                if shortcut in self.tool:
+                    keydict[shortcut] = self.tool[shortcut]
+
+            for location, fobj in cachebuilder.pathmapper.items():
+                if fobj.type == "File":
+                    checksum = next(
+                        (e['checksum'] for e in cachebuilder.files
+                         if 'location' in e and e['location'] == location
+                         and 'checksum' in e
+                         and e['checksum'] != 'sha1$hash'), None)
+                    fobj_stat = os.stat(fobj.resolved)
                     if checksum:
-                        keydict[f.resolved] = [st.st_size, checksum]
+                        keydict[fobj.resolved] = [fobj_stat.st_size, checksum]
                     else:
-                        keydict[f.resolved] = [st.st_size, int(st.st_mtime * 1000)]
+                        keydict[fobj.resolved] = [fobj_stat.st_size,
+                                                  int(fobj_stat.st_mtime * 1000)]
 
             interesting = {"DockerRequirement",
                            "EnvVarRequirement",
@@ -342,7 +349,8 @@ class CommandLineTool(Process):
                           keydictstr, cachekey)
 
             jobcache = os.path.join(runtimeContext.cachedir, cachekey)
-            jobcachepending = jobcache + ".pending"
+            jobcachepending = "{}.{}.pending".format(
+                jobcache, threading.current_thread().ident)
 
             if os.path.isdir(jobcache) and not os.path.isfile(jobcachepending):
                 if docker_req and runtimeContext.use_container:
@@ -685,7 +693,7 @@ class CommandLineTool(Process):
                             if binding.get("loadContents") or compute_checksum:
                                 contents = f.read(CONTENT_LIMIT)
                             if binding.get("loadContents"):
-                                files["contents"] = contents
+                                files["contents"] = contents.decode("utf-8") 
                             if compute_checksum:
                                 checksum = hashlib.sha1()
                                 while contents != b"":
@@ -755,9 +763,7 @@ class CommandLineTool(Process):
                     primary["format"] = builder.do_eval(schema["format"], context=primary)
 
             # Ensure files point to local references outside of the run environment
-            adjustFileObjs(r, cast(  # known bug in mypy
-                # https://github.com/python/mypy/issues/797
-                Callable[[Any], Any], revmap))
+            adjustFileObjs(r, revmap)
 
             if not r and optional:
                 return None

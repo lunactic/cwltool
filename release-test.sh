@@ -3,14 +3,17 @@
 set -e
 set -x
 
+export LC_ALL=C
+
 package=cwltool
 module=cwltool
 slug=${TRAVIS_PULL_REQUEST_SLUG:=common-workflow-language/cwltool}
 repo=https://github.com/${slug}.git
-run_tests="bin/py.test --ignore ${module}/schemas/ --pyarg cwltool"
+run_tests="bin/py.test --ignore ${module}/schemas/ --pyarg cwltool -n$(nproc) --dist=loadfile"
 pipver=7.0.2 # minimum required version of pip
 setuptoolsver=24.2.0 # required to generate correct metadata for
                      # python_requires
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 
 rm -Rf testenv? || /bin/true
 
@@ -70,10 +73,11 @@ rm lib/python-wheels/setuptools* \
 	&& pip install --force-reinstall -U pip==${pipver} \
         && pip install setuptools==${setuptoolsver} wheel
 pip install ${package}*tar.gz
-pip install pytest mock
+pip install "-r${DIR}/test-requirements.txt"
 mkdir out
 tar --extract --directory=out -z -f ${package}*.tar.gz
 cd out/${package}*
+make install-dep
 make dist
 make test
 pip uninstall -y ${package} || true; pip uninstall -y ${package} || true; make install
